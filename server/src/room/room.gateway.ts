@@ -9,49 +9,59 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
+type User = {
+  username: string;
+  roomNum: number;
+};
+
 @WebSocketGateway({
   cors: {
     origin: '*',
   },
 })
 export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  users: Map<string, string>;
-
-  constructor() {
-    this.users = new Map();
-  }
-
-  handleConnection(client: any, ...args: any[]) {
-    console.log(`connect client: ${client.id}`);
-  }
-  handleDisconnect(client: any) {
-    console.log(`disconnect client: ${client.id}`);
-    this.server.emit('onLeaveRoom', this.users.get(client.id));
-    this.users.delete(client.id);
-  }
+  // users: Map<string, User>;
+  rooms: Map<number, Map<string, string>>;
+  userRoom: Map<string, number>;
 
   @WebSocketServer() server: Server;
 
-  @SubscribeMessage('chat')
-  handleMessage(@MessageBody() payload: any): string {
-    console.log(payload);
-
-    this.server.emit('onMessage', payload);
-    return payload;
+  constructor() {
+    this.rooms = new Map();
+    this.userRoom = new Map();
   }
 
-  @SubscribeMessage('joinRoom')
-  handleJoinRoom(
-    @MessageBody() payload: { user: { userName: string } },
-    @ConnectedSocket() client: Socket,
-  ) {
-    this.server.emit('onJoinRoom', payload.user.userName);
-    console.log(`User ${payload.user.userName} with id: ${client.id} joined`);
-    this.users.set(client.id, payload.user.userName);
+  handleConnection(@ConnectedSocket() client: Socket) {
+    const roomNum = +client.handshake.query['roomNum'];
+    const username = '' + client.handshake.query['username'];
+
+    console.log(
+      `connect client: ${client.id}, roomNum: ${roomNum}, username: ${username}`,
+    );
+
+    if (!this.rooms.has(roomNum)) this.rooms.set(roomNum, new Map());
+    this.rooms.get(roomNum).set(client.id, username);
+    this.userRoom.set(client.id, roomNum);
+
+    this.server.emit(`onJoinRoom_${roomNum}`, username);
+  }
+
+  handleDisconnect(@ConnectedSocket() client: Socket) {
+    const roomNum = this.userRoom.get(client.id);
+    const username = this.rooms.get(roomNum).get(client.id);
+
+    console.log(`disconnect client: ${client.id} roomNum: ${roomNum}`);
+
+    this.userRoom.delete(client.id);
+    this.rooms.get(roomNum).delete(client.id);
+    if (this.rooms.get(roomNum).size === 0) this.rooms.delete(roomNum);
+
+    this.server.emit(`onLeaveRoom_${roomNum}`, username);
   }
 
   @SubscribeMessage('loadRoom')
-  handleLoadRoom(): string[] {
-    return Array.from(this.users.values());
+  handleLoadRoom(@ConnectedSocket() client: Socket): string[] {
+    const roomNum = this.userRoom.get(client.id);
+    return Array.from(this.rooms.get(roomNum).values());
   }
 }
